@@ -1,11 +1,14 @@
 # TTC Transit Service Reliability Analysis
 
-Predicting delay-prone times/stations on Toronto's subway network using real
-City of Toronto Open Data, with a full ETL pipeline, comparative ML modeling,
-and an interactive Power BI dashboard.
+Predicting which Toronto subway delays will last 5+ minutes, using real
+City of Toronto Open Data, with a full ETL pipeline, comparative ML
+modeling, an interactive Streamlit app, and a Power BI dashboard.
+
+**🔗 Live interactive dashboard:** https://ttc-transit-reliability-hitakshi.streamlit.app
 
 **23,701 real TTC subway delay events (2024–2026)** | SQL star schema |
-Python ETL | Random Forest vs Gradient Boosting | 3-page Power BI dashboard
+Python ETL | Random Forest vs Gradient Boosting | Streamlit app |
+3-page Power BI dashboard
 
 ---
 
@@ -14,8 +17,8 @@ Python ETL | Random Forest vs Gradient Boosting | 3-page Power BI dashboard
 I built this to demonstrate an end-to-end data science workflow on a real,
 messy, public dataset — not a pre-cleaned Kaggle CSV. It touches SQL schema
 design, Python ETL, data-quality problem solving, comparative ML modeling,
-and BI dashboard delivery, and doubles as a candidate contribution to
-[Data for Good Toronto](https://www.dataforgood.ca/).
+and dashboard delivery in both Streamlit and Power BI, and doubles as a
+candidate contribution to [Data for Good Toronto](https://www.dataforgood.ca/).
 
 ---
 
@@ -34,11 +37,13 @@ and BI dashboard delivery, and doubles as a candidate contribution to
 ```
 ttc-transit-reliability/
 ├── ttc_pipeline.py         <- ETL + feature engineering + model, one file
+├── app/dashboard.py         <- interactive Streamlit app (live link above)
 ├── sql/schema.sql           <- star schema documentation
 ├── notebooks/01_eda.ipynb   <- exploratory analysis, charts, model comparison
 ├── dashboard/
-│   ├── powerbi_data/         <- CSV exports Power BI reads from
-│   └── screenshots/          <- dashboard page screenshots
+│   ├── powerbi_data/         <- star-schema CSV exports (read by Power BI and the Streamlit app)
+│   ├── screenshots/          <- Power BI page screenshots
+│   └── Dashboard_TTC_Data.pbix
 ├── data/
 │   ├── raw/                  <- drop downloaded CSV/XLSX files here (gitignored)
 │   └── processed/            <- SQLite DB + trained model (gitignored)
@@ -73,6 +78,8 @@ first in the string). Tested against the actual 535 raw values:
   Building" and line-level references like "Line 1", correctly left
   unmatched rather than force-mapped)
 
+You can try the matcher live in the **Data Quality** tab of the Streamlit app.
+
 ### 2. Star schema + SQLite
 
 `fact_delay_events` at the center, with `dim_station`, `dim_date`,
@@ -96,51 +103,81 @@ tables — see `sql/schema.sql`.
 
 ### 4. Modeling
 
-Framed as binary classification: will a given (station, hour, day,
-season, ...) combination see a delay ≥ 5 minutes?
+Framed as binary classification: **given that a delay event occurs, will
+it last 5 minutes or more?** (54.6% of events do.) The delay log only
+records incidents, so the model predicts severity, not whether a delay
+happens at all.
 
-**Random Forest vs Gradient Boosting**, trained on identical features for
-a fair comparison — Gradient Boosting selected as the primary model after
-consistently outperforming Random Forest by a small but real margin
-across every feature-set iteration (~0.62-0.65 ROC-AUC range for both).
+**Random Forest vs Gradient Boosting**, trained on identical features and
+the same stratified 80/20 split for a fair comparison. The two models land
+within about **0.01 ROC-AUC** of each other (~0.64 on the holdout set and
+in 5-fold cross-validation). That near-tie is itself evidence for the
+finding below: the limit is in the data, not the choice of algorithm.
 
 ### 5. The real finding: a feature ceiling, not a model problem
 
 Across five separate experiments — baseline features, model swap, adding
 weather, adding a rush-hour flag, adding rolling per-station frequency —
-**ROC-AUC stayed consistently in the 0.62–0.65 range**, and `station_name`
-and `hour` together accounted for the large majority of feature
-importance in every run. Adding weather didn't add *new* signal so much
-as **replace** the coarser `season` feature with a more precise version
-of the same information (season's importance dropped from ~0.09 to
-~0.01 once real temperature was available).
+**ROC-AUC stayed consistently in the 0.62–0.65 range**. Hour of day,
+station, and the station's recent delay history carry most of the feature
+importance. Adding weather didn't add *new* signal so much as **replace**
+the coarser `season` feature with a more precise version of the same
+information (season's importance dropped from ~0.09 to ~0.01 once real
+temperature was available).
 
 **Conclusion:** this class of feature (schedule/location/weather) has hit
 a real, honest ceiling. Meaningfully improving on ~0.64 AUC would likely
 require a different kind of data entirely — live vehicle positions or
 ridership counts — not more derived features from the same delay log.
 
+You can reproduce these experiments in the **Model** tab of the Streamlit
+app by switching feature groups on and off.
+
 ### 6. EDA findings (see `notebooks/01_eda.ipynb`)
 
 - **Hour of day:** volume peaks at rush hour (8am, 4-5pm), but the
-  *longest* individual delays happen overnight (4-5am) — frequent-but-short
-  vs. rare-but-severe.
+  *longest* individual delays happen overnight and early morning (4-5am)
+  — frequent-but-short vs. rare-but-severe. The overnight averages rest
+  on few events, so they signal severity rather than a stable estimate.
 - **Day of week:** Sunday has the fewest delay events but the **highest**
   average delay length (~9.9 min vs ~7.5-8 min weekdays) — reduced Sunday
   service likely means less redundancy when something does go wrong.
 - **Root causes:** the top 3 delay codes (Disorderly Patron, Passenger
   Assistance Alarm, Door Monitoring) are all **passenger/human-behavior
   related, not mechanical failure**.
-- **Season:** winter has both the most delay events and the longest
-  average delays of any season.
-- **Station-level nuance:** Kipling, Bloor-Yonge, and Kennedy lead in raw
-  delay *count*, but that's confounded with being major interchange
-  stations with heavier traffic. Victoria Park stands out differently —
-  lower volume but the highest average delay *length* of the top 15,
-  arguably a more meaningful "problem station" signal.
-- **Rolling trend:** Kipling Station shows a genuine repeating seasonal
-  pattern in its 30-day rolling delay count, peaking every January-February
-  across both years in the dataset.
+- **Season:** winter delays last the longest on average (~8.7 min vs
+  ~7.4-7.8 min in other seasons), even though spring logs slightly more
+  delay events.
+- **Station-level nuance:** Bloor-Yonge, Kipling, and Kennedy lead in raw
+  delay *count*, but that's confounded with being major interchange and
+  terminal stations with heavier traffic. Ranking the 15 busiest stations
+  by average delay *length* instead surfaces Eglinton, Warden, and St Clair
+  — arguably a more meaningful "problem station" signal.
+
+---
+
+## Interactive Streamlit app
+
+**Live:** https://ttc-transit-reliability-hitakshi.streamlit.app
+
+Eight tabs, all driven by sidebar filters (line, date range, season,
+weekday/weekend, hour, minimum delay length). The app imports
+`normalize_station_name()` and `engineer_features()` directly from
+`ttc_pipeline.py`, so its numbers come from the same code as the offline
+analysis.
+
+1. **Overview** — headline metrics, delays by line and by month
+2. **Stations** — clickable schematic map of Lines 1, 2 and 4 (size = volume,
+   colour = average delay), station ranking, and per-station drill-down
+3. **Time Patterns** — delays by hour and day, plus an hour × day heatmap
+4. **Root Causes** — top causes by frequency, average length or total minutes,
+   and when each cause happens during the day
+5. **Weather & Seasons** — monthly delays vs temperature, daily correlation,
+   average delay length by season
+6. **Data Quality** — the station-name cleaning story, with a live matcher demo
+7. **Model** — Random Forest and Gradient Boosting retrained live, ROC curves,
+   feature importance, and a delay-risk predictor
+8. **Findings** — key findings, limitations and next steps
 
 ---
 
@@ -177,12 +214,16 @@ python ttc_pipeline.py
 # Or run steps individually:
 python ttc_pipeline.py --etl-only
 python ttc_pipeline.py --model-only
-python ttc_pipeline.py --powerbi-export   # export CSVs for Power BI
+python ttc_pipeline.py --powerbi-export   # export CSVs for Power BI and the app
+
+# 3. Launch the Streamlit app locally
+streamlit run app/dashboard.py
 ```
 
 If no files are present in `data/raw/`, the pipeline auto-generates a
 small synthetic sample so it can be smoke-tested end-to-end before real
-data arrives.
+data arrives. The Streamlit app reads the real exported CSVs already
+committed in `dashboard/powerbi_data/`, so it runs without any downloads.
 
 ---
 
@@ -194,6 +235,9 @@ data arrives.
 - The ~0.4% of unmatched station values are infrastructure/maintenance
   locations, correctly excluded rather than force-mapped — but this means
   a small number of real delay events aren't attributed to any station.
+- The model predicts how long a delay will last given that one occurs; it
+  can't predict whether a delay happens, since the log contains no
+  delay-free observations.
 - Next step under consideration: extending the pipeline to bus and
   streetcar delay data (same TTC Open Data structure), which would also
   make the currently-unused `mode` feature meaningful.
@@ -202,5 +246,9 @@ data arrives.
 
 ## Tech stack
 
-Python (pandas, scikit-learn, sqlite3) · SQL (star schema) · Power BI
-(DAX, relationships, interactive dashboards) · Jupyter
+Python (pandas, scikit-learn, sqlite3) · SQL (star schema) · Streamlit ·
+Plotly · Power BI (DAX, relationships, interactive dashboards) · Jupyter
+
+---
+
+Built by **Hitakshi Kathiriya** · [GitHub](https://github.com/HitakshiKathiriya)
